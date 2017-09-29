@@ -18,15 +18,48 @@ module FakeS3
 
     def initialize(root, quiet_mode)
       @root = root
+      @quiet_mode = quiet_mode
+      reload(root)
+    end
+
+    def reload(root)
       @buckets = []
       @bucket_hash = {}
-      @quiet_mode = quiet_mode
-      Dir[File.join(root,"*")].each do |bucket|
+      Dir[File.join(root,"*",File::SEPARATOR)].each do |bucket|
         bucket_name = File.basename(bucket)
-        bucket_obj = Bucket.new(bucket_name,Time.now,[])
+        objects = reload_objects(root, bucket_name)
+        bucket_obj = Bucket.new(bucket_name,Time.now,objects)
         @buckets << bucket_obj
         @bucket_hash[bucket_name] = bucket_obj
       end
+    end
+
+    def reload_objects(root, bucket_name)
+      bucket_root = "#{root}/#{bucket_name}/"
+      objects = []
+      Dir[File.join(root,bucket_name,"**",File::SEPARATOR)].each do |path|
+        if File.directory?("#{path}/#{FAKE_S3_METADATA_DIR}")
+          bucket_object_path = path.slice(bucket_root.length, path.length - bucket_root.length - 1)
+          objects << reload_object(root, bucket_name, bucket_object_path)
+        end
+      end
+      objects
+    end
+
+    def reload_object(root,bucket_name, bucket_object_path)
+      bucket_path = "#{root}/#{bucket_name}/#{bucket_object_path}"
+      metadata_path = File.join(bucket_path, FAKE_S3_METADATA_DIR, "metadata")
+      metadata = YAML::load_file(metadata_path)
+      s3_object = S3Object.new
+      s3_object.name = bucket_object_path
+      s3_object.md5 = metadata[:md5]
+      s3_object.content_type = metadata[:content_type]
+      s3_object.content_disposition = metadata[:content_disposition]
+      s3_object.content_encoding = metadata.fetch(:content_encoding,'')
+      s3_object.size = metadata[:size]
+      s3_object.modified_date = metadata[:modified_date]
+      s3_object.cache_control = metadata[:cache_control]
+      s3_object
     end
 
     # Pass a rate limit in bytes per second
@@ -75,6 +108,7 @@ module FakeS3
       raise NoSuchBucket if !bucket
       raise BucketNotEmpty if bucket.objects.count > 0
       FileUtils.rm_r(get_bucket_folder(bucket))
+      @buckets.delete(bucket)
       @bucket_hash.delete(bucket_name)
     end
 
@@ -89,7 +123,7 @@ module FakeS3
           metadata.fetch(:content_type) { "application/octet-stream" }
         real_obj.content_disposition = request.query['response-content-disposition'] ||
           metadata[:content_disposition]
-        real_obj.content_encoding = metadata.fetch(:content_encoding) # if metadata.fetch(:content_encoding)
+        real_obj.content_encoding = metadata.fetch(:content_encoding, '')
         real_obj.io = RateLimitableFile.open(File.join(obj_root, "content"), 'rb')
         real_obj.size = metadata.fetch(:size) { 0 }
         real_obj.creation_date = File.ctime(obj_root).utc.iso8601(SUBSECOND_PRECISION)
