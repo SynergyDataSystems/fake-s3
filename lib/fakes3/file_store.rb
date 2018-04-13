@@ -200,6 +200,10 @@ module FakeS3
       return obj
     end
 
+    def remove_chunk_signature(file_content)
+      file_content.gsub(/(\r\n)?[0-9a-fA-F]+;chunk-signature=[0-9a-f]{64}(\r\n){,2}/, '')
+    end
+
     def store_object(bucket, object_name, request)
       filedata = ""
 
@@ -220,6 +224,8 @@ module FakeS3
       else
         request.body { |chunk| filedata << chunk }
       end
+
+      filedata = remove_chunk_signature(filedata)
 
       do_store_object(bucket, object_name, filedata, request)
     end
